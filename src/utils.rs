@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde_json::Value;
 use sevenz_rust2::ArchiveReader;
 use std::collections::HashMap;
@@ -92,7 +92,7 @@ pub fn gh_latest_release_dl_url(
         let Some(release) = releases.iter().find(|r| {
             r.get("tag_name")
                 .and_then(|r| r.as_str())
-                .is_some_and(|r| r == version)
+                .is_some_and(|r| r.contains(version))
         }) else {
             return Ok(None);
         };
@@ -141,6 +141,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.unwrap(), "https://github.com/luskaner/ageLANServerLauncherCompanion/releases/download/v1.2.1.0/ageLANServerLauncherCompanion_Age2FakeOnline_1.0.0.0.zip");
+        assert_eq!(
+            result.unwrap(),
+            "https://github.com/luskaner/ageLANServerLauncherCompanion/releases/download/v1.2.1.0/ageLANServerLauncherCompanion_Age2FakeOnline_1.0.0.0.zip"
+        );
     }
 }
