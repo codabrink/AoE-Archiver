@@ -1,7 +1,7 @@
 use crate::{
     Context,
     ctx::{StepStatus, Task},
-    utils::{extract_zip, gh_latest_release_dl_url},
+    utils::{extract_zip, gh_download_url},
 };
 use anyhow::{Result, bail};
 use std::{
@@ -120,10 +120,10 @@ fn patch_launcher_aoe2_config(ctx: &Context) -> Result<()> {
 
 fn launcher_full_url(ctx: &Context) -> Result<Option<String>> {
     info!("Getting latest launcher release url.");
-    gh_latest_release_dl_url(
+    gh_download_url(
         &ctx.config.aoe2.gh_launcher_user,
         &ctx.config.aoe2.gh_launcher_repo,
-        Some("v1.12"),
+        Some(&ctx.config.aoe2.launcher_version),
         &["_full_", "win10_x86-64"],
     )
 }

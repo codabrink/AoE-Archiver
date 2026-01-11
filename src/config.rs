@@ -23,7 +23,9 @@ impl Config {
 
 #[derive(Deserialize)]
 pub struct Goldberg {
-    pub download_url: String,
+    pub gh_user: String,
+    pub gh_repo: String,
+    pub version: String,
 }
 
 #[derive(Deserialize)]
@@ -34,4 +36,5 @@ pub struct AoE2 {
     pub gh_companion_repo: String,
     pub gh_launcher_user: String,
     pub gh_launcher_repo: String,
+    pub launcher_version: String,
 }
