@@ -110,8 +110,7 @@ fn patch_launcher_aoe2_config(ctx: &Context) -> Result<()> {
     let aoe2_config = aoe2_config.replace("Path = 'auto'", r#"Path = "../AoE2DE""#);
     let aoe2_config = aoe2_config.replace(
         "ExecutableArgs = []",
-        "ExecutableArgs = []",
-        // r#"ExecutableArgs = ['--overrideHosts="{HostFilePath}"']"#,
+        r#"ExecutableArgs = ['--overrideHosts="{HostFilePath}"']"#,
     );
     fs::write(aoe2_config_path, aoe2_config)?;
 
