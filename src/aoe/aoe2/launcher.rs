@@ -1,15 +1,15 @@
 use crate::{
-    ctx::{StepStatus, Task},
-    utils::{extract_zip, gh_latest_release_dl_url},
     Context,
+    ctx::{StepStatus, Task},
+    utils::{extract_zip, gh_download_url},
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::{
     fs::{self, read_to_string},
     process::Command,
     sync::{
-        mpsc::{self, Receiver},
         Arc,
+        mpsc::{self, Receiver},
     },
 };
 use tracing::{error, info};
@@ -61,23 +61,43 @@ pub fn install_launcher(ctx: Arc<Context>) -> Result<()> {
         fs::write(outpath, file)?;
     }
 
-    patch_launcher_config(&ctx)?;
+    patch_launcher_aoe2_config(&ctx)?;
 
     info!("Generating certs.");
 
     let gen_certs_exe = outdir.join("server").join("bin").join("genCert.exe");
-
     let _ = Command::new(gen_certs_exe).status();
+
+    patch_launcher_main_config(&ctx)?;
 
     info!("Done installing launcher.");
 
     Ok(())
 }
 
-fn patch_launcher_config(ctx: &Context) -> Result<()> {
+fn patch_launcher_main_config(ctx: &Context) -> Result<()> {
+    let outdir = ctx.outdir();
+
+    info!("Patching launcher config.");
+    let launcher_config_path = outdir
+        .join("launcher")
+        .join("resources")
+        .join("config.toml");
+    info!("Reading launcher config.");
+    let launcher_config = read_to_string(&launcher_config_path)?;
+    info!("Patching config.");
+    let launcher_config =
+        launcher_config.replace("SingleAutoSelect = false", "SingleAutoSelect = true");
+    info!("Writing config to file.");
+    fs::write(launcher_config_path, launcher_config)?;
+
+    Ok(())
+}
+
+fn patch_launcher_aoe2_config(ctx: &Context) -> Result<()> {
     // Set the executable directory.
     let outdir = ctx.outdir();
-    info!("Patching launcher config.");
+    info!("Patching launcher aoe2 config.");
     let aoe2_config_path = outdir
         .join("launcher")
         .join("resources")
@@ -90,20 +110,19 @@ fn patch_launcher_config(ctx: &Context) -> Result<()> {
     let aoe2_config = aoe2_config.replace("Path = 'auto'", r#"Path = "../AoE2DE""#);
     let aoe2_config = aoe2_config.replace(
         "ExecutableArgs = []",
-        "ExecutableArgs = []",
-        // r#"ExecutableArgs = ['--overrideHosts="{HostFilePath}"']"#,
+        r#"ExecutableArgs = ['--overrideHosts="{HostFilePath}"']"#,
     );
-    fs::write(aoe2_config_path, aoe2_config.as_bytes())?;
+    fs::write(aoe2_config_path, aoe2_config)?;
 
     Ok(())
 }
 
 fn launcher_full_url(ctx: &Context) -> Result<Option<String>> {
     info!("Getting latest launcher release url.");
-    gh_latest_release_dl_url(
+    gh_download_url(
         &ctx.config.aoe2.gh_launcher_user,
         &ctx.config.aoe2.gh_launcher_repo,
-        Some("v1.11.2"),
-        &["_full_", "win_x86-64"],
+        Some(&ctx.config.aoe2.launcher_version),
+        &["_full_", "win10_x86-64"],
     )
 }

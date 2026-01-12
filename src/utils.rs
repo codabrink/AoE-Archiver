@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde_json::Value;
 use sevenz_rust2::ArchiveReader;
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ pub fn validate_aoe2_source(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn gh_latest_release_dl_url(
+pub fn gh_download_url(
     gh_user: &str,
     gh_repo: &str,
     version: Option<&str>,
@@ -92,7 +92,7 @@ pub fn gh_latest_release_dl_url(
         let Some(release) = releases.iter().find(|r| {
             r.get("tag_name")
                 .and_then(|r| r.as_str())
-                .is_some_and(|r| r == version)
+                .is_some_and(|r| r.contains(version))
         }) else {
             return Ok(None);
         };
@@ -129,11 +129,11 @@ pub fn gh_latest_release_dl_url(
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::gh_latest_release_dl_url;
+    use crate::utils::gh_download_url;
 
     #[test]
     fn load_specific_version() {
-        let result = gh_latest_release_dl_url(
+        let result = gh_download_url(
             "luskaner",
             "ageLANServerLauncherCompanion",
             Some("v1.2.1.0"),
@@ -141,6 +141,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.unwrap(), "https://github.com/luskaner/ageLANServerLauncherCompanion/releases/download/v1.2.1.0/ageLANServerLauncherCompanion_Age2FakeOnline_1.0.0.0.zip");
+        assert_eq!(
+            result.unwrap(),
+            "https://github.com/luskaner/ageLANServerLauncherCompanion/releases/download/v1.2.1.0/ageLANServerLauncherCompanion_Age2FakeOnline_1.0.0.0.zip"
+        );
     }
 }

@@ -2,7 +2,7 @@ use crate::{
     Context,
     ctx::{StepStatus, Task},
     goldberg::GOLDBERG_SUBDIR,
-    utils::{extract_zip, gh_latest_release_dl_url},
+    utils::{extract_zip, gh_download_url},
 };
 use anyhow::{Result, bail};
 use std::{
@@ -68,7 +68,7 @@ pub fn install_launcher_companion(ctx: Arc<Context>) -> Result<()> {
 
 fn launcher_companion_full_url(ctx: &Context) -> Result<Option<String>> {
     info!("Getting latest launcher companion release url.");
-    gh_latest_release_dl_url(
+    gh_download_url(
         &ctx.config.aoe2.gh_companion_user,
         &ctx.config.aoe2.gh_companion_repo,
         None,

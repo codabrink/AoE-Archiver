@@ -1,9 +1,13 @@
-use crate::{Context, ctx::Task, utils::extract_7z};
+use crate::{
+    Context,
+    ctx::Task,
+    utils::{extract_7z, gh_download_url},
+};
 use aes_gcm::{
     Aes256Gcm, KeyInit,
     aead::{Aead, array::Array},
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Context as AnyhowContext, Result, anyhow};
 use common::KEY;
 use std::{
     collections::HashMap,
@@ -75,8 +79,16 @@ pub fn spawn_apply(ctx: Arc<Context>) -> Result<Receiver<()>> {
 pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
     info!("Downloading Goldberg Emulator");
 
+    let goldberg = &ctx.config.goldberg;
+    let dl_url = gh_download_url(
+        &goldberg.gh_user,
+        &goldberg.gh_repo,
+        Some(&goldberg.version),
+        &["emu-win-release.7z"],
+    )?
+    .context("Unable to find goldberg download url")?;
+
     let goldberg_archive = {
-        let dl_url = &ctx.config.goldberg.download_url;
         info!("Downloading goldberg from {}", dl_url);
         let gbe_archive = reqwest::blocking::get(dl_url)?.bytes()?.to_vec();
 
@@ -209,8 +221,21 @@ fn update_cold_client_loader(ini_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn latest_release(ctx: &Context) -> Result<HashMap<String, Vec<u8>>> {
-    let archive = reqwest::blocking::get(&ctx.config.goldberg.download_url)?.bytes()?;
-    extract_7z(&archive.to_vec())
+#[cfg(test)]
+mod tests {
+    use crate::{config::Config, utils::gh_download_url};
+
+    #[test]
+    fn test_goldberg_download_url() {
+        let config = Config::load().unwrap();
+        let dl_url = gh_download_url(
+            &config.goldberg.gh_user,
+            &config.goldberg.gh_repo,
+            Some(&config.goldberg.version),
+            &["emu-win-release.7z"],
+        )
+        .unwrap();
+
+        assert!(dl_url.is_some());
+    }
 }
