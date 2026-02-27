@@ -7,12 +7,23 @@ export enum StepStatus {
     failed,
 }
 
+export struct StepInfo {
+    status: StepStatus,
+    label: string,
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: #cccccc;
+}
+
 component StepIndicator inherits HorizontalLayout {
     in property <StepStatus> status;
     in property <string> label-text;
 
     spacing: 4px;
     alignment: center;
+    min-width: 130px;
 
     Text {
         text: root.status == StepStatus.completed ? "✅"
@@ -49,12 +60,41 @@ component FolderRow inherits HorizontalLayout {
     }
 }
 
+component ActionButton inherits Rectangle {
+    callback clicked();
+    in property <string> text;
+    in property <bool> enabled: true;
+
+    height: 36px;
+    background: root.enabled
+        ? (touch.pressed ? #005fa3 : touch.has-hover ? #006dbf : #0078d4)
+        : #cccccc;
+    border-radius: 4px;
+    animate background { duration: 100ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+
+    Text {
+        text: root.text;
+        color: root.enabled ? #ffffff : #888888;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component MainWindow inherits Window {
     title: "AoE2 DE Archiver";
+    icon: @image-url("../assets/aoe2.png");
     preferred-width: 700px;
-    preferred-height: 600px;
+    preferred-height: 680px;
     min-width: 600px;
-    min-height: 500px;
+    min-height: 520px;
 
     in property <string> source-dir;
     in property <string> out-dir;
@@ -63,10 +103,7 @@ export component MainWindow inherits Window {
     in property <bool> has-progress;
     in property <string> progress-text;
     in property <float> progress-value;
-    in property <StepStatus> step1: StepStatus.not-started;
-    in property <StepStatus> step2: StepStatus.not-started;
-    in property <StepStatus> step3: StepStatus.not-started;
-    in property <StepStatus> step4: StepStatus.not-started;
+    in property <[StepInfo]> steps;
     in property <bool> can-run-all;
     in property <[string]> logs;
 
@@ -84,12 +121,28 @@ export component MainWindow inherits Window {
             font-weight: 700;
         }
 
-        Rectangle { height: 1px; background: #cccccc; }
+        Divider {}
+
+        // Disk space
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: root.disk-space-ok ? "✅" : "⚠️";
+                font-size: 14px;
+            }
+            Text { text: "Disk Space:"; }
+            Text {
+                text: root.disk-space-text;
+                color: root.disk-space-ok ? #00c800 : #dc0000;
+            }
+        }
 
         // Progress bar
         if root.has-progress: VerticalLayout {
             spacing: 4px;
-            Text { text: root.progress-text; font-size: 12px; }
+            vertical-stretch: 0;
+            Text { text: root.progress-text; font-size: 12px; vertical-stretch: 0; }
             Rectangle {
                 height: 20px;
                 background: #e0e0e0;
@@ -100,21 +153,12 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     background: #0078d4;
                     x: 0;
+                    animate width { duration: 200ms; easing: ease-out; }
                 }
             }
         }
 
-        // Disk space
-        HorizontalLayout {
-            spacing: 4px;
-            Text { text: "Disk Space:"; }
-            Text {
-                text: root.disk-space-text;
-                color: root.disk-space-ok ? #00c800 : #dc0000;
-            }
-        }
-
-        Rectangle { height: 1px; background: #cccccc; }
+        Divider {}
 
         Text { text: "Configuration"; font-size: 16px; font-weight: 700; }
 
@@ -136,33 +180,34 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle { height: 1px; background: #cccccc; }
+        Divider {}
 
         Text { text: "Steps"; font-size: 16px; font-weight: 700; }
 
         HorizontalLayout {
             spacing: 20px;
-            StepIndicator { status: root.step1; label-text: "1. Copy"; }
-            StepIndicator { status: root.step2; label-text: "2. Goldberg"; }
-            StepIndicator { status: root.step3; label-text: "3. Companion"; }
-            StepIndicator { status: root.step4; label-text: "4. Launcher"; }
+            for step in root.steps: StepIndicator {
+                status: step.status;
+                label-text: step.label;
+            }
         }
 
-        Button {
+        ActionButton {
             text: "▶ Run All Steps";
             enabled: root.can-run-all;
             clicked => { root.run-all(); }
         }
 
-        Rectangle { height: 1px; background: #cccccc; }
+        Divider {}
 
         Text { text: "Logs"; font-size: 16px; font-weight: 700; }
 
         ScrollView {
-            height: 150px;
+            vertical-stretch: 1;
             viewport-width: self.width;
             VerticalLayout {
                 spacing: 2px;
+                alignment: start;
                 if root.logs.length == 0: Text {
                     text: "No logs yet";
                     color: #808080;
@@ -170,6 +215,7 @@ export component MainWindow inherits Window {
                 for log in root.logs: Text {
                     text: log;
                     font-size: 11px;
+                    font-family: "Courier New";
                     wrap: word-wrap;
                 }
             }

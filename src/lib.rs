@@ -21,6 +21,7 @@ use fs_extra::copy_items;
 use fs_extra::dir::{get_size, CopyOptions};
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use slint_ui::MainWindow;
+use slint_ui::StepInfo;
 use slint_ui::StepStatus as UiStepStatus;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -63,6 +64,15 @@ pub fn launch() -> Result<()> {
     // Log model (newest-first via insert at 0)
     let log_model = Rc::new(VecModel::<SharedString>::default());
     ui.set_logs(log_model.clone().into());
+
+    // Steps model
+    let steps_model = Rc::new(VecModel::<StepInfo>::from(vec![
+        StepInfo { status: UiStepStatus::NotStarted, label: "1. Copy".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "2. Goldberg".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "3. Companion".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "4. Launcher".into() },
+    ]));
+    ui.set_steps(steps_model.clone().into());
 
     // Initialize paths from context
     if let Some(src) = ctx.sourcedir() {
@@ -153,6 +163,7 @@ pub fn launch() -> Result<()> {
         {
             let ui_weak = ui.as_weak();
             let log_model = log_model.clone();
+            let steps_model = steps_model.clone();
             let ctx = ctx.clone();
             let required_gb = required_gb.clone();
             let available_gb = available_gb.clone();
@@ -179,10 +190,12 @@ pub fn launch() -> Result<()> {
                         }
                         AppUpdate::StepStatusChanged => {
                             let statuses = ctx.step_status.lock().unwrap();
-                            ui.set_step1(to_ui_status(&statuses[0]));
-                            ui.set_step2(to_ui_status(&statuses[1]));
-                            ui.set_step3(to_ui_status(&statuses[2]));
-                            ui.set_step4(to_ui_status(&statuses[3]));
+                            for (i, status) in statuses.iter().enumerate() {
+                                if let Some(mut step) = steps_model.row_data(i) {
+                                    step.status = to_ui_status(status);
+                                    steps_model.set_row_data(i, step);
+                                }
+                            }
                             let can_run = ctx.sourcedir().is_some()
                                 && !ctx.is_busy()
                                 && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
