@@ -18,11 +18,10 @@ aes-gcm.workspace = true
 anyhow.workspace = true
 common.workspace = true
 dirs = "6"
-eframe = "0.33"
 fs2 = "0.4"
 fs_extra = "1.3.0"
 generic-array = "1.3.5"
-image = "0.25"
+slint = "1"
 reqwest = { version = "0.12", features = ["default-tls", "blocking", "json"] }
 rfd = "0.15.4"
 rust-ini.workspace = true
@@ -42,4 +41,5 @@ strip = true
 lto = true
 
 [build-dependencies]
+slint-build = "1"
 winresource.workspace = true

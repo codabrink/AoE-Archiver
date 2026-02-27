@@ -4,6 +4,8 @@ use std::process::Command;
 use winresource::WindowsResource;
 
 fn main() -> io::Result<()> {
+    slint_build::compile("ui/main.slint").expect("Slint build failed");
+
     let status = Command::new("cargo")
         .arg("build")
         .arg("--profile")

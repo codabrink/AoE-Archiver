@@ -1,6 +1,5 @@
 use crate::{AppUpdate, config::Config, steam::steam_aoe2_path, utils::desktop_dir};
 use anyhow::{Result, bail};
-use eframe::egui::Color32;
 use fs_extra::dir::get_size;
 use fs2::available_space;
 use std::{
@@ -126,22 +125,3 @@ pub enum StepStatus {
     Failed(String),
 }
 
-impl StepStatus {
-    pub fn icon(&self) -> &str {
-        match self {
-            StepStatus::NotStarted => "⚪",
-            StepStatus::InProgress => "⏳",
-            StepStatus::Completed => "✅",
-            StepStatus::Failed(_) => "❌",
-        }
-    }
-
-    pub fn color(&self) -> Color32 {
-        match self {
-            StepStatus::NotStarted => Color32::GRAY,
-            StepStatus::InProgress => Color32::from_rgb(255, 165, 0), // Orange
-            StepStatus::Completed => Color32::from_rgb(0, 200, 0),    // Green
-            StepStatus::Failed(_) => Color32::from_rgb(220, 0, 0),    // Red
-        }
-    }
-}
