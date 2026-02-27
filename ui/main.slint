@@ -60,8 +60,6 @@ export component MainWindow inherits Window {
     in property <string> out-dir;
     in property <string> disk-space-text;
     in property <bool> disk-space-ok;
-    in property <string> error-text;
-    in property <string> state-text;
     in property <bool> has-progress;
     in property <string> progress-text;
     in property <float> progress-value;
@@ -87,20 +85,6 @@ export component MainWindow inherits Window {
         }
 
         Rectangle { height: 1px; background: #cccccc; }
-
-        // Error banner
-        if root.error-text != "": HorizontalLayout {
-            spacing: 4px;
-            Text { text: "✗ Error:"; color: #dc0000; font-weight: 700; }
-            Text { text: root.error-text; color: #dc0000; }
-        }
-
-        // State banner (only when no error)
-        if root.state-text != "" && root.error-text == "": HorizontalLayout {
-            spacing: 4px;
-            Text { text: "⏳"; color: #ffa500; }
-            Text { text: root.state-text; color: #ffa500; }
-        }
 
         // Progress bar
         if root.has-progress: VerticalLayout {

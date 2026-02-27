@@ -57,20 +57,20 @@ impl Context {
     pub fn set_outdir(&self, path: PathBuf) {
         if let Ok(disk_size) = available_space(&path) {
             let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
-        } else if let Some(parent) = path.parent() {
-            if let Ok(disk_size) = available_space(&parent) {
-                let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
-            }
+        } else if let Some(parent) = path.parent()
+            && let Ok(disk_size) = available_space(parent)
+        {
+            let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
         }
 
         *self.outdir.lock().unwrap() = path;
     }
 
     pub fn set_step_status(&self, step: usize, status: StepStatus) {
-        if let Ok(mut steps) = self.step_status.lock() {
-            if step < steps.len() {
-                steps[step] = status;
-            }
+        if let Ok(mut steps) = self.step_status.lock()
+            && step < steps.len()
+        {
+            steps[step] = status;
         }
 
         let _ = self.tx.send(AppUpdate::StepStatusChanged);

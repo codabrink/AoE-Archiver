@@ -32,10 +32,7 @@ use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 
-#[derive(Default)]
 enum AppUpdate {
-    #[default]
-    Idle,
     Progress(Option<(String, f32)>),
     StepStatusChanged,
     SourceSize(u64),
@@ -197,7 +194,6 @@ pub fn launch() -> Result<()> {
                                 log_model.remove(log_model.row_count() - 1);
                             }
                         }
-                        AppUpdate::Idle => {}
                     }
                 }
             }
@@ -226,7 +222,6 @@ fn to_ui_status(status: &StepStatus) -> UiStepStatus {
 
 fn spawn_copy_game_folder(ctx: Arc<Context>) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Copy)?;
-    let ctx = ctx.clone();
 
     let (tx, rx) = mpsc::sync_channel(0);
 

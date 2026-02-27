@@ -6,7 +6,6 @@ gh_repo = "gbe_fork"
 version = "release-2025_11_27"
 
 [aoe2]
-steam_folder = "AoE2DE"
 gh_companion_user = "luskaner"
 gh_companion_repo = "ageLANServerLauncherCompanion"
 gh_launcher_user = "luskaner"
