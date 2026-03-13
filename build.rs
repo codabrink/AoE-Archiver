@@ -4,7 +4,12 @@ use std::process::Command;
 use winresource::WindowsResource;
 
 fn main() -> io::Result<()> {
-    slint_build::compile("ui/main.slint").expect("Slint build failed");
+    slint_build::compile_with_config(
+        "ui/main.slint",
+        slint_build::CompilerConfiguration::new()
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles),
+    )
+    .expect("Slint build failed");
 
     let status = Command::new("cargo")
         .arg("build")
