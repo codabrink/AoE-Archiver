@@ -6,14 +6,25 @@ mod steam;
 mod ui;
 pub mod utils;
 
+mod slint_ui {
+    slint::include_modules!();
+}
+
 use crate::aoe::aoe2;
-use crate::ctx::{Context, StepStatus, Task};
+use crate::ctx::{Context, Task};
+// Keep ctx::StepStatus accessible as crate::StepStatus for goldberg.rs / companion.rs / etc.
+use crate::ctx::StepStatus;
 use crate::ui::UiLayer;
 use crate::utils::validate_aoe2_source;
 use anyhow::{bail, Context as AnyhowContext, Result};
-use eframe::egui;
 use fs_extra::copy_items;
 use fs_extra::dir::{get_size, CopyOptions};
+use slint::{ComponentHandle, Model, SharedString, VecModel};
+use slint_ui::MainWindow;
+use slint_ui::StepInfo;
+use slint_ui::StepStatus as UiStepStatus;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvError};
 use std::sync::{mpsc, Arc};
@@ -22,30 +33,7 @@ use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 
-struct App {
-    pub update_rx: Receiver<AppUpdate>,
-    pub state: Option<String>,
-    pub error: Option<String>,
-    pub progress: Option<(String, f32)>,
-    pub logs: Vec<String>,
-    pub required_space: Option<u64>,
-    pub available_space: Option<u64>,
-    pub ctx: Arc<Context>,
-}
-
-impl App {
-    fn add_log(&mut self, msg: String) {
-        self.logs.push(msg);
-        if self.logs.len() > 100 {
-            self.logs.remove(0);
-        }
-    }
-}
-
-#[derive(Default)]
 enum AppUpdate {
-    #[default]
-    Idle,
     Progress(Option<(String, f32)>),
     StepStatusChanged,
     SourceSize(u64),
@@ -54,7 +42,7 @@ enum AppUpdate {
 }
 
 pub fn launch() -> Result<()> {
-    let (update_tx, update_rx) = channel();
+    let (update_tx, update_rx) = channel::<AppUpdate>();
 
     // Set up tracing to pipe logs to the UI
     let ui_layer = UiLayer {
@@ -69,63 +57,184 @@ pub fn launch() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
-    // Load icon from assets
-    let icon_data = include_bytes!("../assets/aoe2.ico");
-    let icon = match image::load_from_memory(icon_data) {
-        Ok(img) => {
-            let rgba = img.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            Some(egui::IconData {
-                rgba: rgba.into_raw(),
-                width,
-                height,
-            })
-        }
-        Err(e) => {
-            eprintln!("Failed to load icon: {}", e);
-            None
-        }
-    };
+    let ctx = Arc::new(Context::new(update_tx)?);
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([700.0, 600.0])
-        .with_min_inner_size([600.0, 500.0])
-        .with_resizable(true);
+    let ui = MainWindow::new()?;
 
-    if let Some(icon) = icon {
-        viewport = viewport.with_icon(icon);
+    // Log model (newest-first via insert at 0)
+    let log_model = Rc::new(VecModel::<SharedString>::default());
+    ui.set_logs(log_model.clone().into());
+
+    // Steps model
+    let steps_model = Rc::new(VecModel::<StepInfo>::from(vec![
+        StepInfo { status: UiStepStatus::NotStarted, label: "1. Copy".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "2. Goldberg".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "3. Companion".into() },
+        StepInfo { status: UiStepStatus::NotStarted, label: "4. Launcher".into() },
+    ]));
+    ui.set_steps(steps_model.clone().into());
+
+    // Initialize paths from context
+    if let Some(src) = ctx.sourcedir() {
+        ui.set_source_dir(src.to_string_lossy().as_ref().into());
+    }
+    ui.set_out_dir(ctx.outdir().to_string_lossy().as_ref().into());
+
+    // Set initial can_run_all (source may already be auto-detected from Steam)
+    {
+        let statuses = ctx.step_status.lock().unwrap();
+        let can_run = ctx.sourcedir().is_some()
+            && !ctx.is_busy()
+            && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
+        ui.set_can_run_all(can_run);
     }
 
-    let options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
+    // Wire: select source folder
+    ui.on_select_source_folder({
+        let ctx = ctx.clone();
+        let ui_weak = ui.as_weak();
+        move || {
+            let current = ctx.sourcedir();
+            let mut dialog = rfd::FileDialog::new();
+            if let Some(ref p) = current {
+                dialog = dialog.set_directory(p);
+            }
+            if let Some(new_dir) = dialog.pick_folder() {
+                info!("User selected source directory: {}", new_dir.display());
+                if let Err(e) = validate_aoe2_source(&new_dir) {
+                    rfd::MessageDialog::new()
+                        .set_title("Invalid Directory")
+                        .set_description(&format!("{e}"))
+                        .set_buttons(rfd::MessageButtons::Ok)
+                        .show();
+                    return;
+                }
+                ctx.set_sourcedir(new_dir.clone());
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_source_dir(new_dir.to_string_lossy().as_ref().into());
+                    let statuses = ctx.step_status.lock().unwrap();
+                    let can_run = !ctx.is_busy()
+                        && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
+                    ui.set_can_run_all(can_run);
+                }
+            }
+        }
+    });
 
-    let app = App {
-        state: None,
-        error: None,
-        update_rx,
-        progress: None,
-        logs: Vec::new(),
-        required_space: None,
-        available_space: None,
-        ctx: Arc::new(Context::new(update_tx)?),
-    };
+    // Wire: select destination folder
+    ui.on_select_out_folder({
+        let ctx = ctx.clone();
+        let ui_weak = ui.as_weak();
+        move || {
+            let current = ctx.outdir();
+            let mut dialog = rfd::FileDialog::new();
+            dialog = dialog.set_directory(&current);
+            if let Some(new_dir) = dialog.pick_folder() {
+                info!("Selected destination directory: {}", new_dir.display());
+                ctx.set_outdir(new_dir.clone());
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_out_dir(new_dir.to_string_lossy().as_ref().into());
+                }
+            }
+        }
+    });
 
-    if let Err(err) = eframe::run_native(
-        "AoE2 DE Archiver",
-        options,
-        Box::new(|_cc| Ok(Box::new(app))),
-    ) {
-        println!("{err:?}");
-    };
+    // Wire: run all steps
+    ui.on_run_all({
+        let ctx = ctx.clone();
+        let ui_weak = ui.as_weak();
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_can_run_all(false);
+            }
+            run_all_steps(ctx.clone());
+        }
+    });
+
+    // Disk space state (tracked across timer ticks)
+    let required_gb = Rc::new(Cell::new(0.0_f64));
+    let available_gb = Rc::new(Cell::new(0.0_f64));
+
+    // 50ms polling timer
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(50),
+        {
+            let ui_weak = ui.as_weak();
+            let log_model = log_model.clone();
+            let steps_model = steps_model.clone();
+            let ctx = ctx.clone();
+            let required_gb = required_gb.clone();
+            let available_gb = available_gb.clone();
+            move || {
+                let Some(ui) = ui_weak.upgrade() else { return };
+
+                while let Ok(update) = update_rx.try_recv() {
+                    match update {
+                        AppUpdate::Progress(Some((text, value))) => {
+                            ui.set_has_progress(true);
+                            ui.set_progress_text(text.as_str().into());
+                            ui.set_progress_value(value);
+                        }
+                        AppUpdate::Progress(None) => {
+                            ui.set_has_progress(false);
+                        }
+                        AppUpdate::SourceSize(n) => {
+                            required_gb.set(n as f64 / 1_073_741_824.0);
+                            update_disk_space(&ui, required_gb.get(), available_gb.get());
+                        }
+                        AppUpdate::DestDriveAvailable(n) => {
+                            available_gb.set(n as f64 / 1_073_741_824.0);
+                            update_disk_space(&ui, required_gb.get(), available_gb.get());
+                        }
+                        AppUpdate::StepStatusChanged => {
+                            let statuses = ctx.step_status.lock().unwrap();
+                            for (i, status) in statuses.iter().enumerate() {
+                                if let Some(mut step) = steps_model.row_data(i) {
+                                    step.status = to_ui_status(status);
+                                    steps_model.set_row_data(i, step);
+                                }
+                            }
+                            let can_run = ctx.sourcedir().is_some()
+                                && !ctx.is_busy()
+                                && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
+                            ui.set_can_run_all(can_run);
+                        }
+                        AppUpdate::Log(msg) => {
+                            log_model.insert(0, msg.as_str().into());
+                            if log_model.row_count() > 100 {
+                                log_model.remove(log_model.row_count() - 1);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    ui.run()?;
 
     Ok(())
 }
 
+fn update_disk_space(ui: &MainWindow, required: f64, available: f64) {
+    let text = format!("{:.2} GB required, {:.2} GB available", required, available);
+    ui.set_disk_space_text(text.as_str().into());
+    ui.set_disk_space_ok(available > required);
+}
+
+fn to_ui_status(status: &StepStatus) -> UiStepStatus {
+    match status {
+        StepStatus::NotStarted => UiStepStatus::NotStarted,
+        StepStatus::InProgress => UiStepStatus::InProgress,
+        StepStatus::Completed => UiStepStatus::Completed,
+        StepStatus::Failed(_) => UiStepStatus::Failed,
+    }
+}
+
 fn spawn_copy_game_folder(ctx: Arc<Context>) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Copy)?;
-    let ctx = ctx.clone();
 
     let (tx, rx) = mpsc::sync_channel(0);
 
@@ -253,7 +362,6 @@ fn run_all_steps_inner(ctx: Arc<Context>) -> Result<()> {
     // Step 4: Launcher
     ctx.set_step_status(3, StepStatus::InProgress);
     let rx = aoe2::launcher::spawn_install_launcher(ctx.clone())?;
-
     rx.recv()?;
     info!("Step 4/4 completed: Launcher Installed");
 

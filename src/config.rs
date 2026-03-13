@@ -30,8 +30,6 @@ pub struct Goldberg {
 
 #[derive(Deserialize)]
 pub struct AoE2 {
-    #[allow(dead_code)]
-    pub steam_folder: String,
     pub gh_companion_user: String,
     pub gh_companion_repo: String,
     pub gh_launcher_user: String,

@@ -1,0 +1,224 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export enum StepStatus {
+    not-started,
+    in-progress,
+    completed,
+    failed,
+}
+
+export struct StepInfo {
+    status: StepStatus,
+    label: string,
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: #cccccc;
+}
+
+component StepIndicator inherits HorizontalLayout {
+    in property <StepStatus> status;
+    in property <string> label-text;
+
+    spacing: 4px;
+    alignment: center;
+    min-width: 130px;
+
+    Text {
+        text: root.status == StepStatus.completed ? "✅"
+            : root.status == StepStatus.in-progress ? "⏳"
+            : root.status == StepStatus.failed ? "❌"
+            : "⚪";
+        font-size: 16px;
+    }
+
+    Text {
+        text: root.label-text;
+        color: root.status == StepStatus.completed ? #00c800
+             : root.status == StepStatus.in-progress ? #ffa500
+             : root.status == StepStatus.failed ? #dc0000
+             : #808080;
+    }
+}
+
+component FolderRow inherits HorizontalLayout {
+    in property <string> path;
+    callback select();
+
+    spacing: 8px;
+
+    LineEdit {
+        text: root.path;
+        enabled: false;
+        horizontal-stretch: 1;
+    }
+
+    Button {
+        text: "📁 Select";
+        clicked => { root.select(); }
+    }
+}
+
+component ActionButton inherits Rectangle {
+    callback clicked();
+    in property <string> text;
+    in property <bool> enabled: true;
+
+    height: 36px;
+    background: root.enabled
+        ? (touch.pressed ? #005fa3 : touch.has-hover ? #006dbf : #0078d4)
+        : #cccccc;
+    border-radius: 4px;
+    animate background { duration: 100ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        mouse-cursor: root.enabled ? pointer : default;
+    }
+
+    Text {
+        text: root.text;
+        color: root.enabled ? #ffffff : #888888;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "AoE2 DE Archiver";
+    icon: @image-url("../assets/aoe2.png");
+    preferred-width: 700px;
+    preferred-height: 680px;
+    min-width: 600px;
+    min-height: 520px;
+
+    in property <string> source-dir;
+    in property <string> out-dir;
+    in property <string> disk-space-text;
+    in property <bool> disk-space-ok;
+    in property <bool> has-progress;
+    in property <string> progress-text;
+    in property <float> progress-value;
+    in property <[StepInfo]> steps;
+    in property <bool> can-run-all;
+    in property <[string]> logs;
+
+    callback select-source-folder();
+    callback select-out-folder();
+    callback run-all();
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 8px;
+
+        Text {
+            text: "AoE2 DE Archiver";
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        Divider {}
+
+        // Disk space
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: root.disk-space-ok ? "✅" : "⚠️";
+                font-size: 14px;
+            }
+            Text { text: "Disk Space:"; }
+            Text {
+                text: root.disk-space-text;
+                color: root.disk-space-ok ? #00c800 : #dc0000;
+            }
+        }
+
+        // Progress bar
+        if root.has-progress: VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            Text { text: root.progress-text; font-size: 12px; vertical-stretch: 0; }
+            Rectangle {
+                height: 20px;
+                background: #e0e0e0;
+                border-radius: 4px;
+                clip: true;
+                Rectangle {
+                    width: parent.width * root.progress-value;
+                    height: parent.height;
+                    background: #0078d4;
+                    x: 0;
+                    animate width { duration: 200ms; easing: ease-out; }
+                }
+            }
+        }
+
+        Divider {}
+
+        Text { text: "Configuration"; font-size: 16px; font-weight: 700; }
+
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: "AoE2 DE Source Directory"; }
+            FolderRow {
+                path: root.source-dir;
+                select => { root.select-source-folder(); }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            Text { text: "Destination Directory"; }
+            FolderRow {
+                path: root.out-dir;
+                select => { root.select-out-folder(); }
+            }
+        }
+
+        Divider {}
+
+        Text { text: "Steps"; font-size: 16px; font-weight: 700; }
+
+        HorizontalLayout {
+            spacing: 20px;
+            for step in root.steps: StepIndicator {
+                status: step.status;
+                label-text: step.label;
+            }
+        }
+
+        ActionButton {
+            text: "▶ Run All Steps";
+            enabled: root.can-run-all;
+            clicked => { root.run-all(); }
+        }
+
+        Divider {}
+
+        Text { text: "Logs"; font-size: 16px; font-weight: 700; }
+
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+                if root.logs.length == 0: Text {
+                    text: "No logs yet";
+                    color: #808080;
+                }
+                for log in root.logs: Text {
+                    text: log;
+                    font-size: 11px;
+                    font-family: "Courier New";
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

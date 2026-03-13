@@ -1,6 +1,5 @@
 use crate::{AppUpdate, config::Config, steam::steam_aoe2_path, utils::desktop_dir};
 use anyhow::{Result, bail};
-use eframe::egui::Color32;
 use fs_extra::dir::get_size;
 use fs2::available_space;
 use std::{
@@ -58,20 +57,20 @@ impl Context {
     pub fn set_outdir(&self, path: PathBuf) {
         if let Ok(disk_size) = available_space(&path) {
             let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
-        } else if let Some(parent) = path.parent() {
-            if let Ok(disk_size) = available_space(&parent) {
-                let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
-            }
+        } else if let Some(parent) = path.parent()
+            && let Ok(disk_size) = available_space(parent)
+        {
+            let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
         }
 
         *self.outdir.lock().unwrap() = path;
     }
 
     pub fn set_step_status(&self, step: usize, status: StepStatus) {
-        if let Ok(mut steps) = self.step_status.lock() {
-            if step < steps.len() {
-                steps[step] = status;
-            }
+        if let Ok(mut steps) = self.step_status.lock()
+            && step < steps.len()
+        {
+            steps[step] = status;
         }
 
         let _ = self.tx.send(AppUpdate::StepStatusChanged);
@@ -126,22 +125,3 @@ pub enum StepStatus {
     Failed(String),
 }
 
-impl StepStatus {
-    pub fn icon(&self) -> &str {
-        match self {
-            StepStatus::NotStarted => "⚪",
-            StepStatus::InProgress => "⏳",
-            StepStatus::Completed => "✅",
-            StepStatus::Failed(_) => "❌",
-        }
-    }
-
-    pub fn color(&self) -> Color32 {
-        match self {
-            StepStatus::NotStarted => Color32::GRAY,
-            StepStatus::InProgress => Color32::from_rgb(255, 165, 0), // Orange
-            StepStatus::Completed => Color32::from_rgb(0, 200, 0),    // Green
-            StepStatus::Failed(_) => Color32::from_rgb(220, 0, 0),    // Red
-        }
-    }
-}
