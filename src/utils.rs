@@ -61,6 +61,23 @@ pub fn validate_aoe2_source(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_aoe1_source(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("Directory does not exist");
+    }
+    if !path.is_dir() {
+        bail!("Path is not a directory");
+    }
+
+    // Check for AoE1 DE executable
+    let exe_path = path.join("AoEDE.exe");
+    if !exe_path.exists() {
+        bail!("This doesn't appear to be an AoE1 DE directory (AoEDE.exe not found)");
+    }
+
+    Ok(())
+}
+
 pub fn gh_download_url(
     gh_user: &str,
     gh_repo: &str,

@@ -1,4 +1,4 @@
-use crate::{AppUpdate, config::Config, steam::steam_aoe2_path, utils::desktop_dir};
+use crate::{AppUpdate, config::Config, steam::{steam_aoe1_path, steam_aoe2_path}, utils::desktop_dir};
 use anyhow::{Result, bail};
 use fs_extra::dir::get_size;
 use fs2::available_space;
@@ -7,13 +7,25 @@ use std::{
     sync::{Arc, Mutex, mpsc::Sender},
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GameId {
+    Aoe1,
+    Aoe2,
+}
+
 pub struct Context {
     pub config: Config,
     pub tx: Sender<AppUpdate>,
+    // AoE2 state
     sourcedir: Mutex<Option<PathBuf>>,
     outdir: Mutex<PathBuf>,
-    current_task: Mutex<Option<Task>>,
     pub step_status: Mutex<[StepStatus; 4]>,
+    // AoE1 state
+    aoe1_sourcedir: Mutex<Option<PathBuf>>,
+    aoe1_outdir: Mutex<PathBuf>,
+    pub aoe1_step_status: Mutex<[StepStatus; 4]>,
+    // Shared
+    current_task: Mutex<Option<Task>>,
 }
 
 impl Context {
@@ -23,19 +35,27 @@ impl Context {
             config: Config::load()?,
             sourcedir: Mutex::default(),
             outdir: Mutex::default(),
-            current_task: Mutex::default(),
-
             step_status: Mutex::new([const { StepStatus::NotStarted }; 4]),
+            aoe1_sourcedir: Mutex::default(),
+            aoe1_outdir: Mutex::default(),
+            aoe1_step_status: Mutex::new([const { StepStatus::NotStarted }; 4]),
+            current_task: Mutex::default(),
         };
 
         if let Some(source) = steam_aoe2_path()? {
             ctx.set_sourcedir(source);
         }
+        if let Some(source) = steam_aoe1_path()? {
+            ctx.set_aoe1_sourcedir(source);
+        }
 
         ctx.set_outdir(desktop_dir()?.join("AoE2"));
+        ctx.set_aoe1_outdir(desktop_dir()?.join("AoE1"));
 
         Ok(ctx)
     }
+
+    // ── AoE2 ────────────────────────────────────────────────────────────────
 
     pub fn sourcedir(&self) -> Option<PathBuf> {
         self.sourcedir.lock().unwrap().clone()
@@ -46,11 +66,9 @@ impl Context {
     }
 
     pub fn set_sourcedir(&self, path: PathBuf) {
-        // Get sizes and check disk space
         if let Ok(dir_size) = get_size(&path) {
             let _ = self.tx.send(AppUpdate::SourceSize(dir_size));
         }
-
         *self.sourcedir.lock().unwrap() = Some(path);
     }
 
@@ -62,7 +80,6 @@ impl Context {
         {
             let _ = self.tx.send(AppUpdate::DestDriveAvailable(disk_size));
         }
-
         *self.outdir.lock().unwrap() = path;
     }
 
@@ -72,8 +89,67 @@ impl Context {
         {
             steps[step] = status;
         }
-
         let _ = self.tx.send(AppUpdate::StepStatusChanged);
+    }
+
+    // ── AoE1 ────────────────────────────────────────────────────────────────
+
+    pub fn aoe1_sourcedir(&self) -> Option<PathBuf> {
+        self.aoe1_sourcedir.lock().unwrap().clone()
+    }
+
+    pub fn aoe1_outdir(&self) -> PathBuf {
+        self.aoe1_outdir.lock().unwrap().clone()
+    }
+
+    pub fn set_aoe1_sourcedir(&self, path: PathBuf) {
+        if let Ok(dir_size) = get_size(&path) {
+            let _ = self.tx.send(AppUpdate::Aoe1SourceSize(dir_size));
+        }
+        *self.aoe1_sourcedir.lock().unwrap() = Some(path);
+    }
+
+    pub fn set_aoe1_outdir(&self, path: PathBuf) {
+        if let Ok(disk_size) = available_space(&path) {
+            let _ = self.tx.send(AppUpdate::Aoe1DestDriveAvailable(disk_size));
+        } else if let Some(parent) = path.parent()
+            && let Ok(disk_size) = available_space(parent)
+        {
+            let _ = self.tx.send(AppUpdate::Aoe1DestDriveAvailable(disk_size));
+        }
+        *self.aoe1_outdir.lock().unwrap() = path;
+    }
+
+    pub fn set_aoe1_step_status(&self, step: usize, status: StepStatus) {
+        if let Ok(mut steps) = self.aoe1_step_status.lock()
+            && step < steps.len()
+        {
+            steps[step] = status;
+        }
+        let _ = self.tx.send(AppUpdate::Aoe1StepStatusChanged);
+    }
+
+    // ── Game-generic helpers ─────────────────────────────────────────────────
+
+    pub fn game_sourcedir(&self, game: GameId) -> Option<PathBuf> {
+        match game {
+            GameId::Aoe2 => self.sourcedir(),
+            GameId::Aoe1 => self.aoe1_sourcedir(),
+        }
+    }
+
+    pub fn game_outdir(&self, game: GameId) -> PathBuf {
+        match game {
+            GameId::Aoe2 => self.outdir(),
+            GameId::Aoe1 => self.aoe1_outdir(),
+        }
+    }
+
+    pub fn set_game_step_status(&self, game: GameId, step: usize, status: StepStatus) {
+        match game {
+            GameId::Aoe2 => self.set_step_status(step, status),
+            GameId::Aoe1 => self.set_aoe1_step_status(step, status),
+        }
     }
 }
 
@@ -106,11 +182,13 @@ pub enum Task {
 pub struct TaskReset {
     ctx: Arc<Context>,
 }
+
 impl TaskReset {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 }
+
 impl Drop for TaskReset {
     fn drop(&mut self) {
         *self.ctx.current_task.lock().unwrap() = None;
@@ -124,4 +202,3 @@ pub enum StepStatus {
     Completed,
     Failed(String),
 }
-

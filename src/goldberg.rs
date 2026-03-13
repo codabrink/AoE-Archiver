@@ -1,6 +1,6 @@
 use crate::{
     Context,
-    ctx::Task,
+    ctx::{GameId, StepStatus, Task},
     utils::{extract_7z, gh_download_url},
 };
 use aes_gcm::{
@@ -27,7 +27,9 @@ const FILES: &[&str] = &[
 ];
 const SUBDIRS: &[&str] = &["dlls", "steam_settings", "saves"];
 
-const STEAM_SETTINGS_FILES_SLICE: &[(&str, &str)] = &[
+// ── AoE2 steam settings ──────────────────────────────────────────────────────
+
+const AOE2_STEAM_SETTINGS_SLICE: &[(&str, &str)] = &[
     (
         "supported_languages.txt",
         include_str!("../assets/supported_languages.txt"),
@@ -42,32 +44,89 @@ const STEAM_SETTINGS_FILES_SLICE: &[(&str, &str)] = &[
         include_str!("../assets/configs.user.ini"),
     ),
 ];
-static STEAM_SETTINGS_FILES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    STEAM_SETTINGS_FILES_SLICE
+static AOE2_STEAM_SETTINGS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    AOE2_STEAM_SETTINGS_SLICE
         .iter()
         .map(|(name, content)| (name.to_string(), content.to_string()))
         .collect()
 });
 
+// ── AoE1 steam settings ──────────────────────────────────────────────────────
+
+const AOE1_STEAM_SETTINGS_SLICE: &[(&str, &str)] = &[
+    (
+        "supported_languages.txt",
+        include_str!("../assets/supported_languages.txt"),
+    ),
+    // AoE1 DE has no known public achievements list; use an empty array so
+    // Goldberg does not complain about a missing file.
+    ("achievements.json", "[]"),
+    (
+        "configs.app.ini",
+        include_str!("../assets/aoe1_configs.app.ini"),
+    ),
+    (
+        "configs.user.ini",
+        include_str!("../assets/configs.user.ini"),
+    ),
+];
+static AOE1_STEAM_SETTINGS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    AOE1_STEAM_SETTINGS_SLICE
+        .iter()
+        .map(|(name, content)| (name.to_string(), content.to_string()))
+        .collect()
+});
+
+// ── Per-game static config ────────────────────────────────────────────────────
+
+pub struct GoldbergGameConfig {
+    pub app_id: &'static str,
+    pub exe_filename: &'static str,
+    pub steam_settings: &'static LazyLock<HashMap<String, String>>,
+}
+
+pub static AOE2_GOLDBERG: GoldbergGameConfig = GoldbergGameConfig {
+    app_id: "813780",
+    exe_filename: "AoE2DE_s.exe",
+    steam_settings: &AOE2_STEAM_SETTINGS,
+};
+
+pub static AOE1_GOLDBERG: GoldbergGameConfig = GoldbergGameConfig {
+    app_id: "1017900",
+    exe_filename: "AoEDE.exe",
+    steam_settings: &AOE1_STEAM_SETTINGS,
+};
+
+fn config_for(game: GameId) -> &'static GoldbergGameConfig {
+    match game {
+        GameId::Aoe2 => &AOE2_GOLDBERG,
+        GameId::Aoe1 => &AOE1_GOLDBERG,
+    }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 pub const GOLDBERG_SUBDIR: &str = "goldberg";
 
-pub fn spawn_apply(ctx: Arc<Context>) -> Result<Receiver<()>> {
+/// Spawn goldberg apply in a background thread.  Step index is always 1 for
+/// both games (it is the second step in each pipeline).
+pub fn spawn_apply(ctx: Arc<Context>, game: GameId) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Goldberg)?;
 
     let (tx, rx) = mpsc::sync_channel(0);
 
     std::thread::spawn(move || {
         let _guard = guard;
-        ctx.set_step_status(1, crate::StepStatus::InProgress);
-        match apply_goldberg(ctx.clone()) {
+        ctx.set_game_step_status(game, 1, StepStatus::InProgress);
+        match apply_goldberg(ctx.clone(), game) {
             Ok(_) => {
-                ctx.set_step_status(1, crate::StepStatus::Completed);
+                ctx.set_game_step_status(game, 1, StepStatus::Completed);
                 info!("Goldberg emulator applied successfully");
                 let _ = tx.send(());
             }
             Err(err) => {
                 let err_msg = format!("{:#}", err);
-                ctx.set_step_status(1, crate::StepStatus::Failed(err_msg.clone()));
+                ctx.set_game_step_status(game, 1, StepStatus::Failed(err_msg.clone()));
                 error!("Goldberg installation failed: {err_msg}");
             }
         }
@@ -76,14 +135,16 @@ pub fn spawn_apply(ctx: Arc<Context>) -> Result<Receiver<()>> {
     Ok(rx)
 }
 
-pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
+pub fn apply_goldberg(ctx: Arc<Context>, game: GameId) -> Result<()> {
+    let cfg = config_for(game);
+
     info!("Downloading Goldberg Emulator");
 
-    let goldberg = &ctx.config.goldberg;
+    let goldberg_cfg = &ctx.config.goldberg;
     let dl_url = gh_download_url(
-        &goldberg.gh_user,
-        &goldberg.gh_repo,
-        Some(&goldberg.version),
+        &goldberg_cfg.gh_user,
+        &goldberg_cfg.gh_repo,
+        Some(&goldberg_cfg.version),
         &["emu-win-release.7z"],
     )?
     .context("Unable to find goldberg download url")?;
@@ -101,7 +162,8 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
         archive
     };
 
-    let goldberg_dir = ctx.outdir().join(GOLDBERG_SUBDIR);
+    let outdir = ctx.game_outdir(game);
+    let goldberg_dir = outdir.join(GOLDBERG_SUBDIR);
     std::fs::create_dir_all(&goldberg_dir)?;
     info!("Output directory: {}", goldberg_dir.display());
 
@@ -120,7 +182,6 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
 
         info!("Processing file: {}", original_path);
 
-        // Determine the output filename, preserving case for non-encrypted files
         let output_filename = if path_lower == "steamclient_loader_x64.exe" {
             info!("Encrypting steamclient_loader_x64.exe");
             let key = Array::try_from(&KEY[..32]).expect("Key is always 32 bytes");
@@ -160,10 +221,10 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
         })?;
     }
 
-    // Configure goldberg for AoE2
+    // ── Configure goldberg ────────────────────────────────────────────────────
+
     info!("Patching goldberg configs");
 
-    // Find the ini file case-insensitively
     let ini_path = std::fs::read_dir(&goldberg_dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -181,36 +242,56 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
         })?;
 
     info!("Found ini file at: {}", ini_path.display());
-    update_cold_client_loader(&ini_path)?;
 
-    for (filename, default_file) in &*STEAM_SETTINGS_FILES {
+    // Derive the game folder name from the source directory so it works
+    // regardless of how Steam named the install folder.
+    let source = ctx
+        .game_sourcedir(game)
+        .ok_or_else(|| anyhow!("No source directory set for game"))?;
+    let game_folder = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("Cannot determine game folder name from source path"))?
+        .to_string();
+
+    update_cold_client_loader(&ini_path, cfg.app_id, &game_folder, cfg.exe_filename)?;
+
+    // ── Write steam_settings files ────────────────────────────────────────────
+
+    for (filename, default_content) in cfg.steam_settings.iter() {
         let src_path = PathBuf::from("assets").join(filename);
         let dest_path = goldberg_dir.join("steam_settings").join(filename);
         if std::fs::exists(&src_path)? {
             std::fs::copy(src_path, dest_path)?;
         } else {
-            std::fs::write(dest_path, default_file)?;
+            std::fs::write(dest_path, default_content)?;
         }
     }
 
     let launcher = include_bytes!("../target/release-lto/launch.exe");
-    std::fs::write(ctx.outdir().join("launcher.exe"), launcher)?;
+    std::fs::write(outdir.join("launcher.exe"), launcher)?;
 
     info!("Done installing goldberg");
 
     Ok(())
 }
 
-fn update_cold_client_loader(ini_path: &Path) -> Result<()> {
+fn update_cold_client_loader(
+    ini_path: &Path,
+    app_id: &str,
+    game_folder: &str,
+    exe_filename: &str,
+) -> Result<()> {
     use ini::Ini;
 
     info!("Loading ini file from: {}", ini_path.display());
     let mut conf = Ini::load_from_file(ini_path)
         .map_err(|e| anyhow!("Failed to load {}: {}", ini_path.display(), e))?;
 
+    let exe_path = format!(r#"..\{game_folder}\{exe_filename}"#);
     conf.with_section(Some("SteamClient"))
-        .set("Exe", r#"..\AoE2DE\AoE2DE_s.exe"#)
-        .set("AppId", "813780");
+        .set("Exe", &exe_path)
+        .set("AppId", app_id);
     conf.with_section(Some("Injection"))
         .set("DllsToInjectFolder", "dlls");
 

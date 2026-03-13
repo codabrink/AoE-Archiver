@@ -7,6 +7,10 @@ pub fn steam_aoe2_path() -> Result<Option<PathBuf>> {
     install_location("Steam App 813780")
 }
 
+pub fn steam_aoe1_path() -> Result<Option<PathBuf>> {
+    install_location("Steam App 1017900")
+}
+
 pub fn install_location(app_name: &str) -> Result<Option<PathBuf>> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
