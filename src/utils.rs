@@ -37,6 +37,26 @@ pub fn extract_zip(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
     Ok(map)
 }
 
+pub fn extract_tar_gz(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+
+    let reader = Cursor::new(data);
+    let decoder = GzDecoder::new(reader);
+    let mut archive = Archive::new(decoder);
+    let mut map = HashMap::new();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_string_lossy().into_owned();
+        let mut contents = Vec::new();
+        entry.read_to_end(&mut contents)?;
+        map.insert(path, contents);
+    }
+
+    Ok(map)
+}
+
 pub fn desktop_dir() -> Result<PathBuf> {
     let Some(desktop_dir) = dirs::desktop_dir() else {
         bail!("Missing desktop dir.");

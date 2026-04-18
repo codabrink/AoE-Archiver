@@ -1,5 +1,5 @@
 use crate::{
-    Context,
+    Ctx,
     ctx::{StepStatus, Task},
     goldberg::GOLDBERG_SUBDIR,
     utils::{extract_zip, gh_download_url},
@@ -14,7 +14,7 @@ use std::{
 };
 use tracing::{error, info};
 
-pub fn spawn_install_launcher_companion(ctx: Arc<Context>) -> Result<Receiver<()>> {
+pub fn spawn_install_launcher_companion(ctx: Arc<Ctx>) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Companion)?;
 
     let (tx, rx) = mpsc::sync_channel(0);
@@ -38,7 +38,7 @@ pub fn spawn_install_launcher_companion(ctx: Arc<Context>) -> Result<Receiver<()
     Ok(rx)
 }
 
-pub fn install_launcher_companion(ctx: Arc<Context>) -> Result<()> {
+pub fn install_launcher_companion(ctx: Arc<Ctx>) -> Result<()> {
     let Some(companion_full_url) = launcher_companion_full_url(&ctx)? else {
         bail!("Unable to find latest companion release");
     };
@@ -66,11 +66,11 @@ pub fn install_launcher_companion(ctx: Arc<Context>) -> Result<()> {
     Ok(())
 }
 
-fn launcher_companion_full_url(ctx: &Context) -> Result<Option<String>> {
+fn launcher_companion_full_url(ctx: &Ctx) -> Result<Option<String>> {
     info!("Getting latest launcher companion release url.");
     gh_download_url(
-        &ctx.config.aoe2.gh_companion_user,
-        &ctx.config.aoe2.gh_companion_repo,
+        &ctx.config.aoe.gh_companion_user,
+        &ctx.config.aoe.gh_companion_repo,
         None,
         &["_full_"],
     )

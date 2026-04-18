@@ -3,11 +3,14 @@ use std::path::PathBuf;
 use winreg::RegKey;
 use winreg::enums::*;
 
-pub fn steam_aoe2_path() -> Result<Option<PathBuf>> {
-    install_location("Steam App 813780")
+use crate::ctx::GameDisc;
+
+pub fn source_path<'a>(game: impl Into<&'a GameDisc>) -> Result<Option<PathBuf>> {
+    let game: &'a GameDisc = game.into();
+    steam_install_location(&format!("Steam App {}", game.steam_app_id()))
 }
 
-pub fn install_location(app_name: &str) -> Result<Option<PathBuf>> {
+pub fn steam_install_location(app_name: &str) -> Result<Option<PathBuf>> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
     // Try the most common location first (64-bit systems)

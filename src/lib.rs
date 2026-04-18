@@ -11,14 +11,14 @@ mod slint_ui {
 }
 
 use crate::aoe::aoe2;
-use crate::ctx::{Context, Task};
+use crate::ctx::{Aoe2, Ctx, Game, Task};
 // Keep ctx::StepStatus accessible as crate::StepStatus for goldberg.rs / companion.rs / etc.
 use crate::ctx::StepStatus;
 use crate::ui::UiLayer;
 use crate::utils::validate_aoe2_source;
-use anyhow::{bail, Context as AnyhowContext, Result};
+use anyhow::{Context as AnyhowContext, Result, bail};
 use fs_extra::copy_items;
-use fs_extra::dir::{get_size, CopyOptions};
+use fs_extra::dir::{CopyOptions, get_size};
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use slint_ui::MainWindow;
 use slint_ui::StepInfo;
@@ -26,8 +26,8 @@ use slint_ui::StepStatus as UiStepStatus;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvError};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{Receiver, RecvError, channel};
+use std::sync::{Arc, mpsc};
 use std::thread::sleep;
 use std::time::Duration;
 use tracing::{error, info};
@@ -57,7 +57,7 @@ pub fn launch() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
-    let ctx = Arc::new(Context::new(update_tx)?);
+    let ctx = Arc::new(Ctx::new(update_tx)?);
 
     let ui = MainWindow::new()?;
 
@@ -67,23 +67,36 @@ pub fn launch() -> Result<()> {
 
     // Steps model
     let steps_model = Rc::new(VecModel::<StepInfo>::from(vec![
-        StepInfo { status: UiStepStatus::NotStarted, label: "1. Copy".into() },
-        StepInfo { status: UiStepStatus::NotStarted, label: "2. Goldberg".into() },
-        StepInfo { status: UiStepStatus::NotStarted, label: "3. Companion".into() },
-        StepInfo { status: UiStepStatus::NotStarted, label: "4. Launcher".into() },
+        StepInfo {
+            status: UiStepStatus::NotStarted,
+            label: "1. Copy".into(),
+        },
+        StepInfo {
+            status: UiStepStatus::NotStarted,
+            label: "2. Goldberg".into(),
+        },
+        StepInfo {
+            status: UiStepStatus::NotStarted,
+            label: "3. Companion".into(),
+        },
+        StepInfo {
+            status: UiStepStatus::NotStarted,
+            label: "4. Launcher".into(),
+        },
     ]));
     ui.set_steps(steps_model.clone().into());
 
     // Initialize paths from context
-    if let Some(src) = ctx.sourcedir() {
+    if let Some(src) = ctx.sourcedir(Game::Aoe2(Aoe2::default())) {
         ui.set_source_dir(src.to_string_lossy().as_ref().into());
     }
     ui.set_out_dir(ctx.outdir().to_string_lossy().as_ref().into());
 
     // Set initial can_run_all (source may already be auto-detected from Steam)
     {
-        let statuses = ctx.step_status.lock().unwrap();
-        let can_run = ctx.sourcedir().is_some()
+        let statuses = ctx.step_status.lock();
+        let has_any_source = !ctx.sources.lock().is_empty();
+        let can_run = has_any_source
             && !ctx.is_busy()
             && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
         ui.set_can_run_all(can_run);
@@ -93,14 +106,21 @@ pub fn launch() -> Result<()> {
     ui.on_select_source_folder({
         let ctx = ctx.clone();
         let ui_weak = ui.as_weak();
-        move || {
-            let current = ctx.sourcedir();
+        move |game_str| {
+            let Ok(game) = game_str.parse::<Game>() else {
+                error!("Invalid game string '{game_str}'");
+                return;
+            };
+            let current = ctx.sourcedir(game);
             let mut dialog = rfd::FileDialog::new();
             if let Some(ref p) = current {
                 dialog = dialog.set_directory(p);
             }
             if let Some(new_dir) = dialog.pick_folder() {
-                info!("User selected source directory: {}", new_dir.display());
+                info!(
+                    "User selected {game_str} source directory: {}",
+                    new_dir.display()
+                );
                 if let Err(e) = validate_aoe2_source(&new_dir) {
                     rfd::MessageDialog::new()
                         .set_title("Invalid Directory")
@@ -109,11 +129,14 @@ pub fn launch() -> Result<()> {
                         .show();
                     return;
                 }
-                ctx.set_sourcedir(new_dir.clone());
+                let game: Game = game_str.parse().expect("already validated");
+                ctx.set_sourcedir(game, new_dir.clone());
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_source_dir(new_dir.to_string_lossy().as_ref().into());
-                    let statuses = ctx.step_status.lock().unwrap();
-                    let can_run = !ctx.is_busy()
+                    let statuses = ctx.step_status.lock();
+                    let has_any_source = !ctx.sources.lock().is_empty();
+                    let can_run = has_any_source
+                        && !ctx.is_busy()
                         && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
                     ui.set_can_run_all(can_run);
                 }
@@ -157,61 +180,58 @@ pub fn launch() -> Result<()> {
 
     // 50ms polling timer
     let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_millis(50),
-        {
-            let ui_weak = ui.as_weak();
-            let log_model = log_model.clone();
-            let steps_model = steps_model.clone();
-            let ctx = ctx.clone();
-            let required_gb = required_gb.clone();
-            let available_gb = available_gb.clone();
-            move || {
-                let Some(ui) = ui_weak.upgrade() else { return };
+    timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), {
+        let ui_weak = ui.as_weak();
+        let log_model = log_model.clone();
+        let steps_model = steps_model.clone();
+        let ctx = ctx.clone();
+        let required_gb = required_gb.clone();
+        let available_gb = available_gb.clone();
+        move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
 
-                while let Ok(update) = update_rx.try_recv() {
-                    match update {
-                        AppUpdate::Progress(Some((text, value))) => {
-                            ui.set_has_progress(true);
-                            ui.set_progress_text(text.as_str().into());
-                            ui.set_progress_value(value);
-                        }
-                        AppUpdate::Progress(None) => {
-                            ui.set_has_progress(false);
-                        }
-                        AppUpdate::SourceSize(n) => {
-                            required_gb.set(n as f64 / 1_073_741_824.0);
-                            update_disk_space(&ui, required_gb.get(), available_gb.get());
-                        }
-                        AppUpdate::DestDriveAvailable(n) => {
-                            available_gb.set(n as f64 / 1_073_741_824.0);
-                            update_disk_space(&ui, required_gb.get(), available_gb.get());
-                        }
-                        AppUpdate::StepStatusChanged => {
-                            let statuses = ctx.step_status.lock().unwrap();
-                            for (i, status) in statuses.iter().enumerate() {
-                                if let Some(mut step) = steps_model.row_data(i) {
-                                    step.status = to_ui_status(status);
-                                    steps_model.set_row_data(i, step);
-                                }
+            while let Ok(update) = update_rx.try_recv() {
+                match update {
+                    AppUpdate::Progress(Some((text, value))) => {
+                        ui.set_has_progress(true);
+                        ui.set_progress_text(text.as_str().into());
+                        ui.set_progress_value(value);
+                    }
+                    AppUpdate::Progress(None) => {
+                        ui.set_has_progress(false);
+                    }
+                    AppUpdate::SourceSize(n) => {
+                        required_gb.set(n as f64 / 1_073_741_824.0);
+                        update_disk_space(&ui, required_gb.get(), available_gb.get());
+                    }
+                    AppUpdate::DestDriveAvailable(n) => {
+                        available_gb.set(n as f64 / 1_073_741_824.0);
+                        update_disk_space(&ui, required_gb.get(), available_gb.get());
+                    }
+                    AppUpdate::StepStatusChanged => {
+                        let statuses = ctx.step_status.lock();
+                        for (i, status) in statuses.iter().enumerate() {
+                            if let Some(mut step) = steps_model.row_data(i) {
+                                step.status = to_ui_status(status);
+                                steps_model.set_row_data(i, step);
                             }
-                            let can_run = ctx.sourcedir().is_some()
-                                && !ctx.is_busy()
-                                && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
-                            ui.set_can_run_all(can_run);
                         }
-                        AppUpdate::Log(msg) => {
-                            log_model.insert(0, msg.as_str().into());
-                            if log_model.row_count() > 100 {
-                                log_model.remove(log_model.row_count() - 1);
-                            }
+                        let has_any_source = !ctx.sources.lock().is_empty();
+                        let can_run = has_any_source
+                            && !ctx.is_busy()
+                            && statuses.iter().all(|s| matches!(s, StepStatus::NotStarted));
+                        ui.set_can_run_all(can_run);
+                    }
+                    AppUpdate::Log(msg) => {
+                        log_model.insert(0, msg.as_str().into());
+                        if log_model.row_count() > 100 {
+                            log_model.remove(log_model.row_count() - 1);
                         }
                     }
                 }
             }
-        },
-    );
+        }
+    });
 
     ui.run()?;
 
@@ -233,14 +253,13 @@ fn to_ui_status(status: &StepStatus) -> UiStepStatus {
     }
 }
 
-fn spawn_copy_game_folder(ctx: Arc<Context>) -> Result<Receiver<()>> {
+fn spawn_copy_game_folder(ctx: Arc<Ctx>) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Copy)?;
 
     let (tx, rx) = mpsc::sync_channel(0);
 
     // Validate source directory
-    let source = ctx.sourcedir();
-    if source.is_none() {
+    if ctx.sources.lock().is_empty() {
         bail!("No source directory selected");
     }
 
@@ -267,13 +286,13 @@ fn spawn_copy_game_folder(ctx: Arc<Context>) -> Result<Receiver<()>> {
     Ok(rx)
 }
 
-fn copy_game_folder(ctx: Arc<Context>) -> Result<()> {
+fn copy_game_folder(ctx: Arc<Ctx>) -> Result<()> {
     info!("Preparing to copy AoE2 files");
 
     let outdir = ctx.outdir();
     let source_aoe2_dir = ctx
-        .sourcedir()
-        .ok_or_else(|| anyhow::anyhow!("No source directory"))?;
+        .sourcedir(Game::Aoe2(Aoe2::default()))
+        .ok_or_else(|| anyhow::anyhow!("No AoE2 source directory"))?;
 
     // Validate source
     validate_aoe2_source(&source_aoe2_dir).context("Source validation failed")?;
@@ -326,7 +345,7 @@ fn copy_game_folder(ctx: Arc<Context>) -> Result<()> {
     Ok(())
 }
 
-fn run_all_steps(ctx: Arc<Context>) {
+fn run_all_steps(ctx: Arc<Ctx>) {
     std::thread::spawn({
         move || {
             if let Err(err) = run_all_steps_inner(ctx) {
@@ -340,7 +359,7 @@ fn run_all_steps(ctx: Arc<Context>) {
     });
 }
 
-fn run_all_steps_inner(ctx: Arc<Context>) -> Result<()> {
+fn run_all_steps_inner(ctx: Arc<Ctx>) -> Result<()> {
     // Step 1: Copy
     ctx.set_step_status(0, StepStatus::InProgress);
     let rx = spawn_copy_game_folder(ctx.clone())?;

@@ -107,7 +107,7 @@ export component MainWindow inherits Window {
     in property <bool> can-run-all;
     in property <[string]> logs;
 
-    callback select-source-folder();
+    callback select-source-folder(string);
     callback select-out-folder();
     callback run-all();
 
@@ -167,7 +167,7 @@ export component MainWindow inherits Window {
             Text { text: "AoE2 DE Source Directory"; }
             FolderRow {
                 path: root.source-dir;
-                select => { root.select-source-folder(); }
+                select => { root.select-source-folder("aoe2"); }
             }
         }
 

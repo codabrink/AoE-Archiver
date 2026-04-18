@@ -1,6 +1,6 @@
 use crate::{
-    Context,
-    ctx::Task,
+    Ctx,
+    ctx::{Game, Task},
     utils::{extract_7z, gh_download_url},
 };
 use aes_gcm::{
@@ -17,6 +17,7 @@ use std::{
         mpsc::{self, Receiver},
     },
 };
+use strum::IntoEnumIterator;
 use tracing::{error, info};
 
 const FILES: &[&str] = &[
@@ -30,16 +31,19 @@ const SUBDIRS: &[&str] = &["dlls", "steam_settings", "saves"];
 const STEAM_SETTINGS_FILES_SLICE: &[(&str, &str)] = &[
     (
         "supported_languages.txt",
-        include_str!("../assets/supported_languages.txt"),
+        include_str!("../assets/aoe2/supported_languages.txt"),
     ),
     (
         "achievements.json",
-        include_str!("../assets/achievements.json"),
+        include_str!("../assets/aoe2/achievements.json"),
     ),
-    ("configs.app.ini", include_str!("../assets/configs.app.ini")),
+    (
+        "configs.app.ini",
+        include_str!("../assets/aoe2/configs.app.ini"),
+    ),
     (
         "configs.user.ini",
-        include_str!("../assets/configs.user.ini"),
+        include_str!("../assets/aoe2/configs.user.ini"),
     ),
 ];
 static STEAM_SETTINGS_FILES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
@@ -51,7 +55,7 @@ static STEAM_SETTINGS_FILES: LazyLock<HashMap<String, String>> = LazyLock::new(|
 
 pub const GOLDBERG_SUBDIR: &str = "goldberg";
 
-pub fn spawn_apply(ctx: Arc<Context>) -> Result<Receiver<()>> {
+pub fn spawn_apply(ctx: Arc<Ctx>) -> Result<Receiver<()>> {
     let guard = ctx.set_task(Task::Goldberg)?;
 
     let (tx, rx) = mpsc::sync_channel(0);
@@ -76,7 +80,7 @@ pub fn spawn_apply(ctx: Arc<Context>) -> Result<Receiver<()>> {
     Ok(rx)
 }
 
-pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
+pub fn apply_goldberg(ctx: Arc<Ctx>) -> Result<()> {
     info!("Downloading Goldberg Emulator");
 
     let goldberg = &ctx.config.goldberg;
@@ -151,13 +155,8 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
     for subdir in SUBDIRS {
         let subdir_path = goldberg_dir.join(subdir);
         info!("Creating subdirectory: {}", subdir_path.display());
-        std::fs::create_dir_all(&subdir_path).map_err(|e| {
-            anyhow!(
-                "Failed to create directory {}: {}",
-                subdir_path.display(),
-                e
-            )
-        })?;
+        std::fs::create_dir_all(&subdir_path)
+            .map_err(|e| anyhow!("Failed to create directory {}: {e}", subdir_path.display(),))?;
     }
 
     // Configure goldberg for AoE2
@@ -181,10 +180,12 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
         })?;
 
     info!("Found ini file at: {}", ini_path.display());
-    update_cold_client_loader(&ini_path)?;
+    for game in Game::iter() {
+        create_cold_client_loader(&ini_path, game);
+    }
 
     for (filename, default_file) in &*STEAM_SETTINGS_FILES {
-        let src_path = PathBuf::from("assets").join(filename);
+        let src_path = PathBuf::from("assets").join("aoe2").join(filename);
         let dest_path = goldberg_dir.join("steam_settings").join(filename);
         if std::fs::exists(&src_path)? {
             std::fs::copy(src_path, dest_path)?;
@@ -201,22 +202,26 @@ pub fn apply_goldberg(ctx: Arc<Context>) -> Result<()> {
     Ok(())
 }
 
-fn update_cold_client_loader(ini_path: &Path) -> Result<()> {
+fn create_cold_client_loader(ini_path: &Path, game: Game) -> Result<()> {
     use ini::Ini;
 
-    info!("Loading ini file from: {}", ini_path.display());
+    info!("Creating {game} goldberg config.");
+
     let mut conf = Ini::load_from_file(ini_path)
         .map_err(|e| anyhow!("Failed to load {}: {}", ini_path.display(), e))?;
 
     conf.with_section(Some("SteamClient"))
-        .set("Exe", r#"..\AoE2DE\AoE2DE_s.exe"#)
-        .set("AppId", "813780");
-    conf.with_section(Some("Injection"))
-        .set("DllsToInjectFolder", "dlls");
+        .set("Exe", format!(r#"..\{}"#, game.exe_location()))
+        .set("AppId", game.steam_app_id());
+    if let Some(dlls) = game.dll_folder() {
+        conf.with_section(Some("Injection"))
+            .set("DllsToInjectFolder", dlls);
+    }
 
-    info!("Writing updated ini file to: {}", ini_path.display());
-    conf.write_to_file(ini_path)
-        .map_err(|e| anyhow!("Failed to write {}: {}", ini_path.display(), e))?;
+    let outpath = ini_path.join(format!(".{game}"));
+    info!("Writing ini file to: {}", outpath.display());
+    conf.write_to_file(&outpath)
+        .map_err(|e| anyhow!("Failed to write {}: {}", outpath.display(), e))?;
 
     Ok(())
 }

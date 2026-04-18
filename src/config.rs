@@ -7,7 +7,7 @@ const DEFAULT_CONFIG: &str = include_str!("../config.toml");
 #[derive(Deserialize)]
 pub struct Config {
     pub goldberg: Goldberg,
-    pub aoe2: AoE2,
+    pub aoe: AoE,
 }
 
 impl Config {
@@ -29,7 +29,7 @@ pub struct Goldberg {
 }
 
 #[derive(Deserialize)]
-pub struct AoE2 {
+pub struct AoE {
     pub gh_companion_user: String,
     pub gh_companion_repo: String,
     pub gh_launcher_user: String,
