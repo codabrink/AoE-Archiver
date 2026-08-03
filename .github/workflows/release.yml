@@ -39,8 +39,8 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Build (release-lto)
-        run: cargo build --profile release-lto
+      - name: Build (release-lto, LTO disabled for faster CI)
+        run: cargo build --profile release-lto --config 'profile."release-lto".lto=false'
 
       - name: Stage archive contents
         shell: bash
