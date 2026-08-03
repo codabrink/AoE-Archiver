@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # SemVer tags, with or without a leading "v" (both styles exist in this repo's history).
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag/version label to build (used for the archive name)"
+        required: true
+        default: "dev"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release-lto)
+        run: cargo build --profile release-lto
+
+      - name: Stage archive contents
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release-lto/aoe-archive.exe dist/
+          cp config.toml dist/
+          cp README.md dist/
+
+      - name: Create 7z archive
+        id: archive
+        shell: bash
+        run: |
+          name="aoe-archive-${{ steps.version.outputs.value }}-windows-x64.7z"
+          7z a -mx=9 "$name" ./dist/*
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aoe-archive-${{ steps.version.outputs.value }}-windows-x64
+          path: ${{ steps.archive.outputs.name }}
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.archive.outputs.name }}
+          fail_on_unmatched_files: true
